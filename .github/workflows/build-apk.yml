@@ -1,0 +1,137 @@
+name: Build APK from Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Nama Proyek'
+        required: true
+        type: string
+      project_type:
+        description: 'Tipe Proyek (flutter/webview/android)'
+        required: true
+        type: choice
+        options:
+          - flutter
+          - webview
+          - android
+      repo_url:
+        description: 'URL GitHub Repository (untuk flutter/android)'
+        required: false
+        type: string
+      web_url:
+        description: 'URL Website (untuk webview)'
+        required: false
+        type: string
+      user_id:
+        description: 'Telegram User ID'
+        required: true
+        type: string
+      user_name:
+        description: 'Telegram Username'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: Setup Node.js
+        if: github.event.inputs.project_type == 'webview'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Setup Flutter
+        if: github.event.inputs.project_type == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      
+      - name: Clone Repository (Flutter/Android)
+        if: github.event.inputs.project_type != 'webview'
+        run: |
+          git clone ${{ github.event.inputs.repo_url }} project
+          cd project
+      
+      - name: Build WebView APK
+        if: github.event.inputs.project_type == 'webview'
+        run: |
+          mkdir -p webview_project
+          cd webview_project
+          npm init -y
+          npm install cordova
+          npx cordova create app com.example.app "${{ github.event.inputs.project_name }}"
+          cd app
+          npx cordova platform add android
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=${{ github.event.inputs.web_url }}"></head></html>' > www/index.html
+          npx cordova build android --release
+          cp platforms/android/app/build/outputs/apk/release/app-release.apk ../../app-release.apk
+      
+      - name: Build Flutter APK
+        if: github.event.inputs.project_type == 'flutter'
+        run: |
+          cd project
+          flutter clean
+          flutter pub get
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk ../app-release.apk
+      
+      - name: Build Android Native APK
+        if: github.event.inputs.project_type == 'android'
+        run: |
+          cd project
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+          cp app/build/outputs/apk/release/*.apk ../app-release.apk
+      
+      - name: Upload APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.project_name }}-apk
+          path: app-release.apk
+          retention-days: 7
+      
+      - name: Send to Telegram (Success)
+        if: success()
+        uses: cbrgm/telegram-github-action@v1
+        with:
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: |
+            ✅ *Build Selesai!*
+            
+            📦 Proyek: ${{ github.event.inputs.project_name }}
+            👤 User: ${{ github.event.inputs.user_name }}
+            
+            📱 Download APK:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      
+      - name: Send to Telegram (Failed)
+        if: failure()
+        uses: cbrgm/telegram-github-action@v1
+        with:
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          message: |
+            ❌ *Build GAGAL!*
+            
+            📦 Proyek: ${{ github.event.inputs.project_name }}
+            👤 User: ${{ github.event.inputs.user_name }}
+            
+            Silakan cek log di GitHub Actions.
