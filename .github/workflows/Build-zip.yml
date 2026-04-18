@@ -1,0 +1,104 @@
+name: Build APK from ZIP (Flutter/Android Studio)
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'URL ZIP File'
+        required: true
+        type: string
+      app_name:
+        description: 'Nama Aplikasi'
+        required: true
+        type: string
+      project_type:
+        description: 'Jenis Project (flutter/android)'
+        required: true
+        type: choice
+        options:
+          - flutter
+          - android
+      chat_id:
+        description: 'Telegram Chat ID'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Setup Flutter
+        if: github.event.inputs.project_type == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      
+      - name: Download ZIP
+        run: |
+          curl -L "${{ github.event.inputs.zip_url }}" -o project.zip
+          unzip project.zip -d project/
+      
+      - name: Build Flutter APK
+        if: github.event.inputs.project_type == 'flutter'
+        run: |
+          cd project/
+          flutter clean
+          flutter pub get
+          flutter build apk --release
+      
+      - name: Build Android Studio APK
+        if: github.event.inputs.project_type == 'android'
+        run: |
+          cd project/
+          chmod +x gradlew
+          ./gradlew assembleRelease
+      
+      - name: Find APK
+        id: find_apk
+        run: |
+          if [ "${{ github.event.inputs.project_type }}" == "flutter" ]; then
+            APK_PATH=$(find project/ -name "*.apk" | head -n 1)
+          else
+            APK_PATH=$(find project/ -name "*.apk" | head -n 1)
+          fi
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.app_name }}.apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
+          retention-days: 7
+      
+      - name: Send to Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ github.event.inputs.chat_id }}
+          token: ${{ secrets.BOT_TOKEN }}
+          message: |
+            ✅ BUILD ZIP BERHASIL!
+            
+            📱 Nama: ${{ github.event.inputs.app_name }}
+            📦 Tipe: ${{ github.event.inputs.project_type }}
+            📦 Ukuran: ~70 MB
+            
+            🔗 Download: APK akan diupload otomatis oleh bot
