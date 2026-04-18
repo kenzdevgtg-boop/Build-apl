@@ -1,0 +1,118 @@
+name: 🔨 Build APK - KENZMD Edition
+
+on:
+  repository_dispatch:
+    types: [build-apk]
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: 'URL Website'
+        required: true
+        type: string
+      app_name:
+        description: 'Nama Aplikasi'
+        required: true
+        type: string
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: ☕ Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: 🤖 Setup Android SDK
+        run: |
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-11076708_latest.zip
+          mv cmdline-tools latest
+          echo "y" | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+      
+      - name: 📦 Install Cordova
+        run: npm install -g cordova
+      
+      - name: 🏗️ Setup Build Variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            echo "WEBSITE_URL=${{ github.event.client_payload.website_url }}" >> $GITHUB_ENV
+            echo "APP_NAME=${{ github.event.client_payload.app_name }}" >> $GITHUB_ENV
+            echo "CHAT_ID=${{ github.event.client_payload.chat_id }}" >> $GITHUB_ENV
+            echo "BOT_TOKEN=${{ github.event.client_payload.bot_token }}" >> $GITHUB_ENV
+          else
+            echo "WEBSITE_URL=${{ github.event.inputs.website_url }}" >> $GITHUB_ENV
+            echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
+          fi
+          echo "BUILD_ID=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+      
+      - name: 🏗️ Create Cordova Project
+        run: |
+          cordova create app com.web2apk.builder "${{ env.APP_NAME }}"
+          cd app
+          cordova platform add android
+          rm -rf www/*
+          
+          cat > www/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>${{ env.APP_NAME }}</title>
+              <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  iframe { width: 100%; height: 100vh; border: none; }
+              </style>
+          </head>
+          <body>
+              <iframe src="${{ env.WEBSITE_URL }}" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          </body>
+          </html>
+          EOF
+      
+      - name: 🔨 Build APK
+        run: |
+          cd app
+          cordova build android --release -- --packageType=apk
+          APK_PATH=$(find platforms/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          fi
+          SAFE_NAME=$(echo "${{ env.APP_NAME }}" | sed 's/[^a-zA-Z0-9]/_/g')
+          cp "$APK_PATH" "${{ github.workspace }}/${SAFE_NAME}.apk"
+          echo "APK_PATH=${{ github.workspace }}/${SAFE_NAME}.apk" >> $GITHUB_ENV
+      
+      - name: 📤 Send APK to Telegram
+        if: env.BOT_TOKEN != '' && env.CHAT_ID != ''
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ env.CHAT_ID }}
+          token: ${{ env.BOT_TOKEN }}
+          document: ${{ env.APK_PATH }}
+          message: |
+            🎉 *BUILD APK BERHASIL!*
+            
+            📱 *Aplikasi:* ${{ env.APP_NAME }}
+            🌐 *URL:* ${{ env.WEBSITE_URL }}
+            
+            📥 *Download APK di attachment!*
+            
+            💎 BOT BUILD Pro
+      
+      - name: 📦 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}
+          path: ${{ env.APK_PATH }}
+          retention-days: 7
